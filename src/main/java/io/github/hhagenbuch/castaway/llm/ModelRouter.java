@@ -60,29 +60,45 @@ public class ModelRouter implements LlmClient {
     }
 
     @Override
-    public Mono<LlmResponse> chat(List<ObjectNode> messages, Collection<AgentTool> tools) {
+    public Mono<LlmResponse> chat(String system, List<ObjectNode> messages, Collection<AgentTool> tools) {
         LinkState state = link.state();
-        LlmClient delegate = route(state);
-        if (delegate == cloud) {
-            return cloud.chat(messages, tools)
-                    .map(response -> response.withProvenance(new Provenance(cloud.label(), state)))
-                    .onErrorResume(ModelRouter::isConnectivity, e -> fallBackToLocal(messages, tools, state, e));
+        if (route(state) == cloud) {
+            // cloud primary -> fall back to local on connectivity failure, and nudge the
+            // monitor toward OFFLINE (the plug was likely pulled mid-request).
+            return cloud.chat(system, messages, tools)
+                    .map(r -> r.withProvenance(new Provenance(cloud.label(), state)))
+                    .onErrorResume(ModelRouter::isConnectivity,
+                            e -> fallBack(local, local.label(), true, system, messages, tools, state, e));
         }
-        return local.chat(messages, tools)
-                .map(response -> response.withProvenance(new Provenance(local.label(), state)));
+        // local primary. Fall back to cloud only when the link state says cloud is
+        // reachable (DEGRADED) — never when OFFLINE, where the clear "local unavailable"
+        // error must surface instead of a doomed cloud retry.
+        Mono<LlmResponse> localCall = local.chat(system, messages, tools)
+                .map(r -> r.withProvenance(new Provenance(local.label(), state)));
+        if (state == LinkState.OFFLINE) {
+            return localCall;
+        }
+        return localCall.onErrorResume(ModelRouter::isConnectivity,
+                e -> fallBack(cloud, cloud.label(), false, system, messages, tools, state, e));
     }
 
     /**
-     * Cloud connectivity failed while the monitor still believed the link was up. Retry
-     * on the local model and hint the monitor that the cloud is unreachable, so it
-     * converges to OFFLINE faster than the probe cadence alone would.
+     * The chosen client failed on a connectivity error; retry the same request on the
+     * other one, tagged {@code (FALLBACK)} so the user sees it wasn't the normal path.
+     *
+     * @param hint whether to nudge the monitor toward OFFLINE — true only for the
+     *             cloud-&gt;local direction (a failed cloud call is evidence the link is
+     *             down); false for local-&gt;cloud (the cloud is up, the local model isn't).
      */
-    private Mono<LlmResponse> fallBackToLocal(List<ObjectNode> messages, Collection<AgentTool> tools,
-                                              LinkState state, Throwable cause) {
-        log.warn("Cloud call failed on connectivity ({}); falling back to local model", cause.toString());
-        link.hintUnreachable();
-        return local.chat(messages, tools)
-                .map(response -> response.withProvenance(new Provenance(local.label(), state, true)));
+    private Mono<LlmResponse> fallBack(LlmClient target, String label, boolean hint, String system,
+                                       List<ObjectNode> messages, Collection<AgentTool> tools,
+                                       LinkState state, Throwable cause) {
+        log.warn("Primary model failed on connectivity ({}); falling back to {}", cause.toString(), label);
+        if (hint) {
+            link.hintUnreachable();
+        }
+        return target.chat(system, messages, tools)
+                .map(r -> r.withProvenance(new Provenance(label, state, true)));
     }
 
     /** Which client answers in this link state. Package-visible for the router test. */

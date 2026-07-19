@@ -4,8 +4,16 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.time.Clock;
+
 @Configuration
 public class WebClientConfig {
+
+    /** Injectable clock so TTL/staleness logic is testable with a fixed time. */
+    @Bean
+    public Clock clock() {
+        return Clock.systemUTC();
+    }
 
     /** Talks to the Anthropic Messages API; also reused by the link probe for reachability. */
     @Bean

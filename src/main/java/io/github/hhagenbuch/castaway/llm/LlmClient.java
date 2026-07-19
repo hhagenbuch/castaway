@@ -15,8 +15,11 @@ import java.util.List;
  * Abstraction over an LLM. The payoff of this interface in castaway is that the
  * {@code ModelRouter}, the cloud client, and the local client are all just
  * {@code LlmClient}s — the agent loop can't tell which one answered.
+ *
+ * @param system optional system prompt (the CapabilityGate's degradation notice
+ *               when offline); {@code null} or blank means none.
  */
 public interface LlmClient {
 
-    Mono<LlmResponse> chat(List<ObjectNode> messages, Collection<AgentTool> tools);
+    Mono<LlmResponse> chat(String system, List<ObjectNode> messages, Collection<AgentTool> tools);
 }

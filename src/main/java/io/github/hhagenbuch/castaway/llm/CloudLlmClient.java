@@ -46,10 +46,10 @@ public class CloudLlmClient implements LlmClient {
     }
 
     @Override
-    public Mono<LlmResponse> chat(List<ObjectNode> messages, Collection<AgentTool> tools) {
+    public Mono<LlmResponse> chat(String system, List<ObjectNode> messages, Collection<AgentTool> tools) {
         return webClient.post()
                 .uri("/v1/messages")
-                .bodyValue(buildBody(messages, tools))
+                .bodyValue(buildBody(system, messages, tools))
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .map(this::parse)
@@ -57,10 +57,13 @@ public class CloudLlmClient implements LlmClient {
                         .filter(CloudLlmClient::isRetryable));
     }
 
-    private ObjectNode buildBody(List<ObjectNode> messages, Collection<AgentTool> tools) {
+    private ObjectNode buildBody(String system, List<ObjectNode> messages, Collection<AgentTool> tools) {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", props.model());
         body.put("max_tokens", props.maxTokens());
+        if (system != null && !system.isBlank()) {
+            body.put("system", system); // Anthropic's top-level system field
+        }
         ArrayNode msgs = body.putArray("messages");
         messages.forEach(msgs::add);
         if (!tools.isEmpty()) {
