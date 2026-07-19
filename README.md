@@ -7,9 +7,11 @@
 > failing, routes to a local model when the link drops, queues side-effects
 > for reconciliation, and syncs memory when the connection returns.
 
-**Status: Phase 0 — design.** This repo currently contains the design only.
-See [`docs/DESIGN.md`](docs/DESIGN.md) for the RFC. Code lands in phases; the
-roadmap below tracks progress.
+**Status: Phase 1 — skeleton, link detection, and model routing.** The runtime
+boots, detects link state with hysteresis, and routes each request to the cloud
+or a local model accordingly, tagging every answer with its provenance. See
+[`docs/DESIGN.md`](docs/DESIGN.md) for the full RFC; the roadmap below tracks
+progress.
 
 ## Architecture
 
@@ -46,10 +48,43 @@ model, shows an `OFFLINE` banner, drafts and *queues* an email instead of
 pretending it sent it, then reconciles when the link returns — revalidating
 each queued action against current state before it fires.
 
+## Running it (Phase 1)
+
+```bash
+# 1. A local fallback model, served by Ollama:
+ollama pull qwen3:8b
+
+# 2. The cloud model (optional — without a key, castaway simply lives offline):
+export ANTHROPIC_API_KEY=sk-ant-...
+
+mvn spring-boot:run
+```
+
+Watch the link state, and stream its transitions:
+
+```bash
+curl -s localhost:8080/api/link           # {"link":"ONLINE"}
+curl -N localhost:8080/api/link/stream     # SSE feed of ONLINE/DEGRADED/OFFLINE
+```
+
+Chat — the reply is tagged with where it came from:
+
+```bash
+curl -s localhost:8080/api/chat -H 'content-type: application/json' \
+  -d '{"message":"What is 21 * 2?"}'
+# online:   {"reply":"42", ..., "provenance":"cloud:claude-sonnet-5 (ONLINE)"}
+# wifi off: {"reply":"42", ..., "provenance":"local:qwen3:8b (OFFLINE)"}
+```
+
+Turn Wi-Fi off, wait for `OFFLINE`, and the same endpoint keeps answering from
+the local model — honestly labelled, never pretending it was the cloud. The
+`LinkMonitor` uses hysteresis (N consecutive agreeing probes) so a single
+dropped packet can't flap the state.
+
 ## Roadmap
 
-- [ ] Phase 0 — design doc (this)
-- [ ] Phase 1 — skeleton + `LinkMonitor` + `ModelRouter` (local model via Ollama)
+- [x] Phase 0 — design doc ([`docs/DESIGN.md`](docs/DESIGN.md))
+- [x] Phase 1 — skeleton + `LinkMonitor` + `ModelRouter` (local model via Ollama)
 - [ ] Phase 2 — `CapabilityGate` + `Outbox` + reconciler with revalidation
 - [ ] Phase 3 — `MemoryLog` sync + chaos harness + evals-under-partition
 - [ ] Phase 4 — demo GIF, local-model benchmark table, README polish
