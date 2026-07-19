@@ -7,11 +7,13 @@
 > failing, routes to a local model when the link drops, queues side-effects
 > for reconciliation, and syncs memory when the connection returns.
 
-**Status: Phase 1 — skeleton, link detection, and model routing.** The runtime
-boots, detects link state with hysteresis, and routes each request to the cloud
-or a local model accordingly, tagging every answer with its provenance. See
-[`docs/DESIGN.md`](docs/DESIGN.md) for the full RFC; the roadmap below tracks
-progress.
+**Status: Phase 2 — capability gating + a revalidating outbox.** On top of the
+Phase 1 link-aware routing, tools now declare how much connectivity they need;
+offline, the agent is *told* it's degraded, hides online-only tools, and **queues**
+deferrable side-effects (like sending email) instead of pretending they happened.
+On reconnect a **revalidation** pass asks the cloud model whether each queued
+action still makes sense before it fires — stale ones are surfaced, not sent. See
+[`docs/DESIGN.md`](docs/DESIGN.md) for the full RFC; the roadmap below tracks progress.
 
 ## Architecture
 
@@ -88,11 +90,35 @@ and tags the answer `local:qwen3:8b (FALLBACK)` — then nudges the monitor towa
 `OFFLINE`. The conversation survives the plug being pulled, not just a link
 that's already known-down.
 
+### Deferred actions with revalidation (Phase 2)
+
+Offline, tools that have real side-effects don't fire — they queue. Ask the
+agent to send an email while `OFFLINE`:
+
+```bash
+curl -s localhost:8080/api/chat -H 'content-type: application/json' \
+  -d '{"message":"Email bob@example.com to move our 2pm meeting to 3pm."}'
+# reply: "...I've QUEUED the email to bob@example.com (id 1); it will be
+#         revalidated and sent automatically when the connection returns..."
+
+curl -s localhost:8080/api/outbox     # [{ "state":"QUEUED", "actionType":"send_email", ... }]
+```
+
+The agent knows it's offline (the CapabilityGate tells it), so it drafts and
+queues rather than claiming it sent the mail. When the link returns, the
+reconciler **revalidates each queued action against the current state** before
+executing it — an email queued to reschedule a meeting that has since passed is
+marked `STALE` and surfaced, never sent. Online-only tools (e.g. `live_price`)
+are hidden entirely while offline, so the model can't invent a live answer.
+
+The outbox is embedded SQLite, so queued actions survive a restart. Its lifecycle
+is `QUEUED → REVALIDATED → EXECUTED | STALE` (see [`docs/DESIGN.md`](docs/DESIGN.md) §3).
+
 ## Roadmap
 
 - [x] Phase 0 — design doc ([`docs/DESIGN.md`](docs/DESIGN.md))
 - [x] Phase 1 — skeleton + `LinkMonitor` + `ModelRouter` (local model via Ollama)
-- [ ] Phase 2 — `CapabilityGate` + `Outbox` + reconciler with revalidation
+- [x] Phase 2 — `CapabilityGate` + SQLite `Outbox` + reconciler with revalidation
 - [ ] Phase 3 — `MemoryLog` sync + chaos harness + evals-under-partition
 - [ ] Phase 4 — demo GIF, local-model benchmark table, README polish
 - [ ] Later — multi-node memory mesh; k8s operator integration ([agent-operator](https://github.com/hhagenbuch/agent-operator))

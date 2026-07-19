@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LinkMonitorTest {
 
     // Defaults: requiredConsecutive = 2, degradedRttMillis = 400.
-    private final CastawayProperties props = new CastawayProperties(null, null, null);
+    private final CastawayProperties props = new CastawayProperties(null, null, null, null);
     private final LinkMonitor monitor = new LinkMonitor(() -> Mono.empty(), props);
 
     @Test

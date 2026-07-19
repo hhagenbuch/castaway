@@ -45,10 +45,10 @@ public class LocalLlmClient implements LlmClient {
     }
 
     @Override
-    public Mono<LlmResponse> chat(List<ObjectNode> messages, Collection<AgentTool> tools) {
+    public Mono<LlmResponse> chat(String system, List<ObjectNode> messages, Collection<AgentTool> tools) {
         return ollama.post()
                 .uri("/api/chat")
-                .bodyValue(buildBody(messages, tools))
+                .bodyValue(buildBody(system, messages, tools))
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .map(this::parse)
@@ -60,13 +60,20 @@ public class LocalLlmClient implements LlmClient {
                                 + " — is Ollama running? (ollama serve; ollama pull " + props.local().model() + ")", e));
     }
 
-    private ObjectNode buildBody(List<ObjectNode> messages, Collection<AgentTool> tools) {
+    private ObjectNode buildBody(String system, List<ObjectNode> messages, Collection<AgentTool> tools) {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", props.local().model());
         body.put("stream", false);
         ObjectNode options = body.putObject("options");
         options.put("num_predict", props.local().maxTokens());
-        body.set("messages", toOllamaMessages(messages));
+        ArrayNode ollamaMessages = toOllamaMessages(messages);
+        if (system != null && !system.isBlank()) {
+            ObjectNode sys = mapper.createObjectNode(); // Ollama accepts a role:system message
+            sys.put("role", "system");
+            sys.put("content", system);
+            ollamaMessages.insert(0, sys);
+        }
+        body.set("messages", ollamaMessages);
         if (!tools.isEmpty()) {
             ArrayNode toolArray = body.putArray("tools");
             for (AgentTool tool : tools) {

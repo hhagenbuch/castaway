@@ -28,6 +28,19 @@ castaway:
     # DEGRADED default: prefer the local model (latency x tokens is brutal on a
     # satellite link). Budget-aware refinement is a later increment.
     degraded-prefers-local: true
+  outbox:
+    # Embedded SQLite file for deferred actions; survives restart.
+    path: castaway-outbox.db
+    # How long a queued action stays valid before it's ruled stale (24h).
+    default-ttl-seconds: 86400
+
+# Deferred-action outbox persistence (SQLite, embedded, single-writer).
+spring:
+  datasource:
+    url: jdbc:sqlite:${castaway.outbox.path}
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
 
 management:
   endpoints:

@@ -5,5 +5,14 @@ castaway:
   local:
     base-url: http://localhost:11434
     model: test-local
+  outbox:
+    path: target/castaway-test-outbox.db
 agent:
   api-key: ""
+
+spring:
+  datasource:
+    url: jdbc:sqlite:${castaway.outbox.path}
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1

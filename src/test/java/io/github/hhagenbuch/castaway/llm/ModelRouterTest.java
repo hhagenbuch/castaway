@@ -40,7 +40,7 @@ class ModelRouterTest {
     void offlineAnswerIsTaggedWithLocalProvenance() {
         ModelRouter router = new ModelRouter(monitorAt(LinkState.OFFLINE), cloud, local, preferLocal(true));
 
-        StepVerifier.create(router.chat(List.<ObjectNode>of(), List.<AgentTool>of()))
+        StepVerifier.create(router.chat(null, List.<ObjectNode>of(), List.<AgentTool>of()))
                 .assertNext(response -> {
                     assertThat(response.text()).isEqualTo("local says hi");
                     assertThat(response.provenance().answeredBy()).isEqualTo("local:test");
@@ -54,7 +54,7 @@ class ModelRouterTest {
     void onlineAnswerIsTaggedWithCloudProvenance() {
         ModelRouter router = new ModelRouter(monitorAt(LinkState.ONLINE), cloud, local, preferLocal(true));
 
-        StepVerifier.create(router.chat(List.<ObjectNode>of(), List.<AgentTool>of()))
+        StepVerifier.create(router.chat(null, List.<ObjectNode>of(), List.<AgentTool>of()))
                 .assertNext(response -> {
                     assertThat(response.text()).isEqualTo("cloud says hi");
                     assertThat(response.provenance().answeredBy()).isEqualTo("cloud:test");
@@ -67,7 +67,7 @@ class ModelRouterTest {
     void cloudConnectivityFailureFallsBackToLocalAndHintsTheMonitor() {
         cloud.failWith(new ConnectException("connection refused")); // plug pulled mid-request
         AtomicBoolean hinted = new AtomicBoolean(false);
-        LinkMonitor monitor = new LinkMonitor(Mono::empty, new CastawayProperties(null, null, null)) {
+        LinkMonitor monitor = new LinkMonitor(Mono::empty, new CastawayProperties(null, null, null, null)) {
             @Override
             public LinkState state() {
                 return LinkState.ONLINE; // monitor hasn't flipped yet
@@ -80,7 +80,7 @@ class ModelRouterTest {
         };
         ModelRouter router = new ModelRouter(monitor, cloud, local, preferLocal(true));
 
-        StepVerifier.create(router.chat(List.<ObjectNode>of(), List.<AgentTool>of()))
+        StepVerifier.create(router.chat(null, List.<ObjectNode>of(), List.<AgentTool>of()))
                 .assertNext(response -> {
                     assertThat(response.text()).isEqualTo("local says hi");
                     assertThat(response.provenance().fellBack()).isTrue();
@@ -95,17 +95,44 @@ class ModelRouterTest {
         cloud.failWith(new IllegalStateException("HTTP 400 bad request")); // cloud reachable, unhappy
         ModelRouter router = new ModelRouter(monitorAt(LinkState.ONLINE), cloud, local, preferLocal(true));
 
-        StepVerifier.create(router.chat(List.<ObjectNode>of(), List.<AgentTool>of()))
+        StepVerifier.create(router.chat(null, List.<ObjectNode>of(), List.<AgentTool>of()))
                 .expectErrorMessage("HTTP 400 bad request")
                 .verify();
     }
 
+    @Test
+    void degradedLocalFailureFallsBackToCloud() {
+        // DEGRADED prefers local, but Ollama is down and the cloud is reachable — mirror the fallback.
+        local.failWith(new ConnectException("ollama down"));
+        ModelRouter router = new ModelRouter(monitorAt(LinkState.DEGRADED), cloud, local, preferLocal(true));
+
+        StepVerifier.create(router.chat(null, List.<ObjectNode>of(), List.<AgentTool>of()))
+                .assertNext(response -> {
+                    assertThat(response.text()).isEqualTo("cloud says hi");
+                    assertThat(response.provenance().fellBack()).isTrue();
+                    assertThat(response.provenance().render()).isEqualTo("cloud:test (FALLBACK)");
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void offlineLocalFailureHasNoCloudFallbackAndPropagates() {
+        // OFFLINE: the cloud is unreachable, so there's nothing to fall back to — the
+        // clear local-unavailable error must surface rather than a doomed cloud retry.
+        local.failWith(new ConnectException("ollama down"));
+        ModelRouter router = new ModelRouter(monitorAt(LinkState.OFFLINE), cloud, local, preferLocal(true));
+
+        StepVerifier.create(router.chat(null, List.<ObjectNode>of(), List.<AgentTool>of()))
+                .expectError(ConnectException.class)
+                .verify();
+    }
+
     private static CastawayProperties preferLocal(boolean value) {
-        return new CastawayProperties(null, null, new CastawayProperties.Routing(value));
+        return new CastawayProperties(null, null, new CastawayProperties.Routing(value), null);
     }
 
     private static LinkMonitor monitorAt(LinkState state) {
-        return new LinkMonitor(Mono::empty, new CastawayProperties(null, null, null)) {
+        return new LinkMonitor(Mono::empty, new CastawayProperties(null, null, null, null)) {
             @Override
             public LinkState state() {
                 return state;
@@ -130,7 +157,7 @@ class ModelRouterTest {
         }
 
         @Override
-        public Mono<LlmResponse> chat(List<ObjectNode> messages, Collection<AgentTool> tools) {
+        public Mono<LlmResponse> chat(String system, List<ObjectNode> messages, Collection<AgentTool> tools) {
             return failWith != null
                     ? Mono.error(failWith)
                     : Mono.just(new LlmResponse("cloud says hi", List.of(), null, "end_turn"));
@@ -138,8 +165,14 @@ class ModelRouterTest {
     }
 
     private static class FakeLocal extends LocalLlmClient {
+        private Throwable failWith;
+
         FakeLocal() {
-            super(null, new CastawayProperties(null, null, null), null);
+            super(null, new CastawayProperties(null, null, null, null), null);
+        }
+
+        void failWith(Throwable t) {
+            this.failWith = t;
         }
 
         @Override
@@ -148,8 +181,10 @@ class ModelRouterTest {
         }
 
         @Override
-        public Mono<LlmResponse> chat(List<ObjectNode> messages, Collection<AgentTool> tools) {
-            return Mono.just(new LlmResponse("local says hi", List.of(), null, "end_turn"));
+        public Mono<LlmResponse> chat(String system, List<ObjectNode> messages, Collection<AgentTool> tools) {
+            return failWith != null
+                    ? Mono.error(failWith)
+                    : Mono.just(new LlmResponse("local says hi", List.of(), null, "end_turn"));
         }
     }
 }

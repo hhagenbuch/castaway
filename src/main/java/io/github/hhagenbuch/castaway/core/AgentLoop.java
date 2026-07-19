@@ -9,16 +9,20 @@ package io.github.hhagenbuch.castaway.core;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.hhagenbuch.castaway.capability.CapabilityGate;
 import io.github.hhagenbuch.castaway.config.AgentProperties;
+import io.github.hhagenbuch.castaway.link.LinkMonitor;
 import io.github.hhagenbuch.castaway.llm.LlmClient;
 import io.github.hhagenbuch.castaway.llm.LlmResponse;
 import io.github.hhagenbuch.castaway.llm.ToolCall;
+import io.github.hhagenbuch.castaway.tools.AgentTool;
 import io.github.hhagenbuch.castaway.tools.ToolRegistry;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -34,14 +38,18 @@ public class AgentLoop {
     private final ConversationMemory memory;
     private final AgentProperties props;
     private final ObjectMapper mapper;
+    private final LinkMonitor link;
+    private final CapabilityGate gate;
 
     public AgentLoop(LlmClient llm, ToolRegistry registry, ConversationMemory memory,
-                     AgentProperties props, ObjectMapper mapper) {
+                     AgentProperties props, ObjectMapper mapper, LinkMonitor link, CapabilityGate gate) {
         this.llm = llm;
         this.registry = registry;
         this.memory = memory;
         this.props = props;
         this.mapper = mapper;
+        this.link = link;
+        this.gate = gate;
     }
 
     public Mono<AgentResult> run(String sessionId, String userMessage) {
@@ -49,19 +57,23 @@ public class AgentLoop {
         int mark = messages.size();
         messages.add(textMessage("user", userMessage));
         List<String> toolsUsed = new ArrayList<>();
-        return step(messages, 0, toolsUsed)
+        // Rewrite the visible toolset and system notice for the current link state, so
+        // the model only sees usable tools and knows when it's degraded.
+        CapabilityGate.Gated gated = gate.gate(link.state(), registry.all());
+        return step(messages, 0, toolsUsed, gated.systemNotice(), gated.tools())
                 .map(response -> new AgentResult(response.text(), List.copyOf(toolsUsed), response.provenance()))
                 .onErrorResume(e -> Mono.just(new AgentResult(
                         recordFailure(messages, mark, userMessage, e), List.copyOf(toolsUsed), null)));
     }
 
-    private Mono<LlmResponse> step(List<ObjectNode> messages, int depth, List<String> toolsUsed) {
+    private Mono<LlmResponse> step(List<ObjectNode> messages, int depth, List<String> toolsUsed,
+                                   String system, Collection<AgentTool> tools) {
         if (depth >= props.maxToolIterations()) {
             return Mono.just(new LlmResponse(
                     "Stopped: exceeded the maximum of " + props.maxToolIterations() + " tool iterations.",
                     List.of(), null, "max_iterations"));
         }
-        return llm.chat(messages, registry.all())
+        return llm.chat(system, messages, tools)
                 .flatMap(response -> {
                     messages.add(assistantMessage(response));
                     if (!response.wantsTools()) {
@@ -72,7 +84,7 @@ public class AgentLoop {
                                 messages.add(results);
                                 return results;
                             })
-                            .then(Mono.defer(() -> step(messages, depth + 1, toolsUsed)));
+                            .then(Mono.defer(() -> step(messages, depth + 1, toolsUsed, system, tools)));
                 });
     }
 
