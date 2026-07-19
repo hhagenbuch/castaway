@@ -7,13 +7,13 @@
 > failing, routes to a local model when the link drops, queues side-effects
 > for reconciliation, and syncs memory when the connection returns.
 
-**Status: Phase 2 — capability gating + a revalidating outbox.** On top of the
-Phase 1 link-aware routing, tools now declare how much connectivity they need;
-offline, the agent is *told* it's degraded, hides online-only tools, and **queues**
-deferrable side-effects (like sending email) instead of pretending they happened.
-On reconnect a **revalidation** pass asks the cloud model whether each queued
-action still makes sense before it fires — stale ones are surfaced, not sent. See
-[`docs/DESIGN.md`](docs/DESIGN.md) for the full RFC; the roadmap below tracks progress.
+**Status: Phase 3 — event-log memory sync, chaos harness, evals under partition.**
+On top of Phase 1 routing and the Phase 2 capability gate + revalidating outbox,
+conversation memory is now an append-only event log whose ship↔shore sync is log
+shipping with last-writer-wins conflict resolution and fold-back; network
+conditions are reproducible fixtures; and the same golden suite runs ONLINE and
+OFFLINE with honesty assertions. See [`docs/DESIGN.md`](docs/DESIGN.md) for the
+full RFC; the roadmap below tracks progress.
 
 ## Architecture
 
@@ -114,12 +114,31 @@ are hidden entirely while offline, so the model can't invent a live answer.
 The outbox is embedded SQLite, so queued actions survive a restart. Its lifecycle
 is `QUEUED → REVALIDATED → EXECUTED | STALE` (see [`docs/DESIGN.md`](docs/DESIGN.md) §3).
 
+### Memory as an event log, and resilience testing (Phase 3)
+
+Conversation memory is an **append-only event log** (`MemoryLog`), so syncing two
+instances (a ship offline, a shore online talking to the same session) is log
+shipping by high-water mark, not diffing. When both append while partitioned, the
+divergence is detected, both branches are kept, the visible head is resolved
+last-writer-wins, and a `FOLD_BACK` event carries the losing branch back as context
+("while you were offline, you also asked X elsewhere") — nothing is silently dropped.
+
+Two ways to make the network misbehave on purpose:
+
+- **[`chaos/`](chaos/)** — Toxiproxy scenarios (`partition`, `satellite`, `flap`) that
+  reproduce a hard cut, a 700 ms/5%-loss satellite link, and a flapping link.
+- **[`evals/`](evals/)** — the same golden suite run `ONLINE` and `OFFLINE` (via the
+  `--castaway.link.forced-state` hook) with **honesty assertions**: offline, the agent
+  must acknowledge it's offline and must not claim the email was sent. Degradation
+  measured as physics, not vibes.
+
 ## Roadmap
 
 - [x] Phase 0 — design doc ([`docs/DESIGN.md`](docs/DESIGN.md))
 - [x] Phase 1 — skeleton + `LinkMonitor` + `ModelRouter` (local model via Ollama)
 - [x] Phase 2 — `CapabilityGate` + SQLite `Outbox` + reconciler with revalidation
-- [ ] Phase 3 — `MemoryLog` sync + chaos harness + evals-under-partition
+- [x] Phase 3 — append-only `MemoryLog` + sync/merge/fold-back, [chaos harness](chaos/),
+      [evals under partition](evals/) (two-instance *networked* ship/shore demo deferred)
 - [ ] Phase 4 — demo GIF, local-model benchmark table, README polish
 - [ ] Later — multi-node memory mesh; k8s operator integration ([agent-operator](https://github.com/hhagenbuch/agent-operator))
 

@@ -40,12 +40,26 @@ public class LinkMonitor {
     private LinkState pending = LinkState.ONLINE;
     private int pendingCount = 0;
 
+    /** When set (via {@code castaway.link.forced-state}), probes and hints are ignored. */
+    private final LinkState forced;
+
     private Disposable probing;
 
     public LinkMonitor(LinkProbe probe, CastawayProperties props) {
         this.probe = probe;
         this.cfg = props.link();
+        this.forced = parseForced(cfg.forcedState());
+        if (forced != null) {
+            current = forced;
+        }
         sink.tryEmitNext(current);
+    }
+
+    private static LinkState parseForced(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return LinkState.valueOf(value.trim().toUpperCase());
     }
 
     public LinkState state() {
@@ -60,6 +74,10 @@ public class LinkMonitor {
     /** Begin periodic probing once the app is up (skipped when disabled, e.g. in tests). */
     @EventListener(ApplicationReadyEvent.class)
     public void startProbing() {
+        if (forced != null) {
+            log.info("Link FORCED to {} (castaway.link.forced-state); probing disabled", forced);
+            return;
+        }
         if (!cfg.probeEnabled()) {
             log.info("Link probing disabled; link pinned at {}", current);
             return;
@@ -96,6 +114,9 @@ public class LinkMonitor {
      * drive transitions deterministically without any real network.
      */
     synchronized void submit(ProbeResult result) {
+        if (forced != null) {
+            return; // a forced link ignores all evidence
+        }
         LinkState observed = classify(result);
         if (observed == current) {
             pendingCount = 0;              // stability confirmed; cancel any pending flip

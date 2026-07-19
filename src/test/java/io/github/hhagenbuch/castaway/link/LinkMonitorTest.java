@@ -66,6 +66,19 @@ class LinkMonitorTest {
     }
 
     @Test
+    void forcedStateIgnoresProbesAndHints() {
+        // castaway.link.forced-state = OFFLINE -> deterministic partition for evals/demo.
+        CastawayProperties forced = new CastawayProperties(
+                null, new CastawayProperties.Link(true, 5000, 2000, 400, 2, "OFFLINE"), null, null);
+        LinkMonitor pinned = new LinkMonitor(() -> Mono.empty(), forced);
+
+        assertThat(pinned.state()).isEqualTo(LinkState.OFFLINE);
+        pinned.submit(ProbeResult.reachable(10)); // evidence of a good link...
+        pinned.hintUnreachable();
+        assertThat(pinned.state()).isEqualTo(LinkState.OFFLINE); // ...ignored while forced
+    }
+
+    @Test
     void streamReplaysCurrentStateToLateSubscribers() {
         monitor.submit(ProbeResult.unreachable());
         monitor.submit(ProbeResult.unreachable()); // now OFFLINE
