@@ -37,9 +37,14 @@ class InMemoryOutbox implements Outbox {
 
     @Override
     public List<OutboxEntry> queued() {
+        return byState(OutboxState.QUEUED);
+    }
+
+    @Override
+    public List<OutboxEntry> byState(OutboxState state) {
         List<OutboxEntry> out = new ArrayList<>();
         for (OutboxEntry e : byId.values()) {
-            if (e.state() == OutboxState.QUEUED) {
+            if (e.state() == state) {
                 out.add(e);
             }
         }

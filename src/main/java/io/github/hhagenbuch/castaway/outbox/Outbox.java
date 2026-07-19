@@ -21,6 +21,9 @@ public interface Outbox {
     /** Entries still awaiting reconciliation ({@code QUEUED}), oldest first. */
     List<OutboxEntry> queued();
 
+    /** Entries in a given state, oldest first — used by the startup orphan sweep. */
+    List<OutboxEntry> byState(OutboxState state);
+
     /** Everything, any state — for the operator view / demo. */
     List<OutboxEntry> all();
 

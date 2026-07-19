@@ -109,7 +109,9 @@ castaway and the cloud API, driven by scenario scripts under `chaos/`:
 
 ```
 PROPOSED ──► QUEUED ──► REVALIDATED ──► EXECUTED
-   │            │             │
+   │            │             │  \
+   │            │             │   └► ORPHANED  (crash/failure after REVALIDATED — execution
+   │            │             │                 unknown; surfaced, never retried)
    │            │             └──► STALE     (revalidation says the action no
    │            │                            longer makes sense — surfaced to user)
    │            └──────────────────► (expires via TTL → STALE)
@@ -119,9 +121,14 @@ PROPOSED ──► QUEUED ──► REVALIDATED ──► EXECUTED
 - **PROPOSED** — model drafted a deferrable action while offline.
 - **QUEUED** — persisted to the Outbox with idempotency key + context + TTL.
 - **REVALIDATED** — on reconnect, cloud model checked action vs. current state.
-- **EXECUTED** — revalidation passed; side-effect performed exactly once
-  (idempotency key guards double-fire).
+- **EXECUTED** — revalidation passed; side-effect performed.
 - **STALE** — revalidation failed or TTL expired; surfaced, never fired.
+- **ORPHANED** — the process died (or the executor failed) after the entry was
+  marked REVALIDATED but before EXECUTED was confirmed. Since the state advances
+  *before* the side-effect, execution is **at-most-once**: we can't tell whether the
+  side-effect happened, so we never re-run it — an unsent email is recoverable, a
+  double-sent one isn't. A startup sweep moves such entries here and logs them; they
+  are visible on `GET /api/outbox` for a human to reconcile.
 - **REJECTED** — declined at draft time.
 
 ## 4. Consistency model (MemoryLog)

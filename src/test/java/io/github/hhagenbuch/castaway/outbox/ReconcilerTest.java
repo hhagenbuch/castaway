@@ -59,6 +59,35 @@ class ReconcilerTest {
     }
 
     @Test
+    void executeFailureOrphansTheEntryAndDoesNotRetry() {
+        // An action with no executor (unknown type) fails after REVALIDATED.
+        outbox.enqueue("k2", "unknown_action", "{}", "ctx", 86_400);
+        Reconciler reconciler = reconciler(entry -> Verdict.valid("looks fine"));
+
+        reconciler.drain();
+
+        assertThat(transport.sent()).isEmpty();
+        assertThat(outbox.all().get(0).state()).isEqualTo(OutboxState.ORPHANED);
+
+        // at-most-once: a second pass must not re-attempt it (it's no longer QUEUED)
+        reconciler.drain();
+        assertThat(outbox.all().get(0).state()).isEqualTo(OutboxState.ORPHANED);
+    }
+
+    @Test
+    void startupSweepSurfacesEntriesStrandedInRevalidated() {
+        // Simulate a crash between REVALIDATED and EXECUTED: an entry left in REVALIDATED.
+        OutboxEntry entry = queueEmail(86_400);
+        outbox.updateState(entry.id(), OutboxState.REVALIDATED);
+        Reconciler reconciler = reconciler(e -> Verdict.valid("unused"));
+
+        reconciler.sweepOrphans();
+
+        assertThat(outbox.all().get(0).state()).isEqualTo(OutboxState.ORPHANED); // surfaced
+        assertThat(transport.sent()).isEmpty();                                  // never re-fired
+    }
+
+    @Test
     void ttlExpiredIsStaleWithoutEvenRevalidating() {
         queueEmail(60); // created at epoch 10_000, ttl 60s; clock is also 10_000 -> not yet...
         // Re-run reconciler with a clock far in the future so the entry is expired.

@@ -58,8 +58,12 @@ public class JdbcOutbox implements Outbox {
 
     @Override
     public List<OutboxEntry> queued() {
-        return jdbc.query("SELECT * FROM outbox WHERE state = ? ORDER BY id",
-                MAPPER, OutboxState.QUEUED.name());
+        return byState(OutboxState.QUEUED);
+    }
+
+    @Override
+    public List<OutboxEntry> byState(OutboxState state) {
+        return jdbc.query("SELECT * FROM outbox WHERE state = ? ORDER BY id", MAPPER, state.name());
     }
 
     @Override
