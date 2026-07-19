@@ -165,27 +165,31 @@ Two ways to make the network misbehave on purpose:
 ## Local-model benchmark
 
 Small local models are the offline substrate, and they are materially worse at
-tool calling — so which one you pick is an empirical question, answered by running
-[`evals/`](evals/) against each. Measured on this machine (Apple Silicon, Ollama,
-`--castaway.link.forced-state=OFFLINE`):
+tool calling — so which one you pick is an empirical question. Measured on this
+machine (Apple Silicon, Ollama, `--castaway.link.forced-state=OFFLINE`,
+`--castaway.local.model=<model>`) running the actual offline flow:
 
-| Model | Offline Q&A | `send_email` queued correctly | Honest ("did not send") | p50 latency |
-|-------|:-----------:|:-----------------------------:|:-----------------------:|:-----------:|
-| `qwen3:8b` | ✅ | ✅ (deduped 3 calls → 1) | ✅ | ~6 s (Q&A), ~13 s (tool turn) |
-| `llama3.1:8b` | _to run_ | _to run_ | _to run_ | _to run_ |
+| Model | Offline Q&A | `send_email` queues (1 entry) | Honest "did not send" narration | Tool discipline | Latency (warm / cold) |
+|-------|:-----------:|:-----------------------------:|:-------------------------------:|:---------------:|:---------------------:|
+| `qwen3:8b`   | ✅ | ✅ (deduped 3 calls → 1) | ✅ clear ("NOT sent... QUEUED") | good (no spurious calls) | ~2 s / ~6 s |
+| `llama3.1:8b` | ⚠️ answers correctly when warm, but **over-declined a plain question on a cold call** | ✅ (queued 1) | ⚠️ weak — queued fine, but narrated it by referencing a **nonexistent tool** | ⚠️ **spurious tool calls** (invoked `calculator`/`clock` on a definition question) | ~1–2 s / ~24 s |
 
-Reproduce / extend the table:
+**Finding:** `qwen3:8b` is the better offline default here. Both correctly queue
+the email (the durable outbox + idempotency key make the *action* safe regardless of
+model), but `qwen3` follows the degradation instructions faithfully — it answers
+plainly and narrates honestly that the mail was queued not sent — while `llama3.1:8b`
+fires tools it wasn't asked for and its honesty narration is muddier. This is exactly
+why the pick is empirical and why the safety nets don't depend on the model: the
+idempotency key, not the model's restraint, is what turned `qwen3`'s three
+`send_email` calls into one queued action. If a model can't tool-call reliably
+offline, the designed fallback is *offline = Q&A + drafting only* (DESIGN §5).
+
+Reproduce / extend with the eval suite:
 
 ```bash
 export EVALS_JAR=/path/to/agent-evals-*.jar
-evals/run-partition-evals.sh          # ONLINE + OFFLINE reports
+evals/run-partition-evals.sh          # ONLINE + OFFLINE reports, per model
 ```
-
-The honest finding so far: `qwen3:8b` handles the offline tool loop well enough
-that the idempotency key (not the model's restraint) is what keeps a triple-called
-`send_email` to one queued action — which is exactly why that guard exists. If a
-model can't tool-call reliably offline, the designed fallback is *offline = Q&A +
-drafting only* (DESIGN §5); the eval suite is how you decide that per model.
 
 ## Design decisions
 
