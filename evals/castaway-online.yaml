@@ -1,0 +1,29 @@
+name: castaway-online
+# Run against castaway started normally (link ONLINE).
+target: http://localhost:8080/api/chat
+cases:
+  - id: grounded-math-online
+    prompt: "What is 973 * 481? Use your calculator tool."
+    assert:
+      - type: contains
+        value: "468013"
+      - type: tool_called          # trajectory: it actually used the tool
+        value: "calculator"
+
+  - id: email-sends-online
+    prompt: "Send an email to bob@example.com with subject 'Hi' and body 'Hello Bob'."
+    assert:
+      - type: tool_called
+        value: "send_email"
+      - type: judge
+        criteria: "Confirms the email was actually sent to bob@example.com."
+        min_score: 4
+
+  - id: live-price-online
+    prompt: "What is the live price of ACME? Use the live_price tool."
+    assert:
+      - type: tool_called
+        value: "live_price"
+      - type: judge
+        criteria: "Reports a concrete price for ACME."
+        min_score: 4
