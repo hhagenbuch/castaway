@@ -9,6 +9,8 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
@@ -82,13 +84,50 @@ public class Reconciler {
                     markStale(entry, verdict.reason());
                     continue;
                 }
+                // At-most-once: advance BEFORE the side-effect, so a crash here can't
+                // cause a re-fire. If execution itself fails, we can't tell whether the
+                // side-effect happened -> ORPHANED for review, never retried.
                 outbox.updateState(entry.id(), OutboxState.REVALIDATED);
-                execute(entry);
-                outbox.updateState(entry.id(), OutboxState.EXECUTED);
-                log.info("Executed queued action id={} ({})", entry.id(), entry.actionType());
+                try {
+                    execute(entry);
+                    outbox.updateState(entry.id(), OutboxState.EXECUTED);
+                    log.info("Executed queued action id={} ({})", entry.id(), entry.actionType());
+                } catch (Exception ex) {
+                    outbox.updateState(entry.id(), OutboxState.ORPHANED);
+                    log.error("Action id={} revalidated but execution unconfirmed; ORPHANED "
+                            + "(at-most-once, not retried)", entry.id(), ex);
+                }
             } catch (Exception e) {
-                log.error("Failed to reconcile action id={}", entry.id(), e);
+                // Failure BEFORE REVALIDATED (e.g. the revalidator threw): leave it QUEUED
+                // so the next reconnect retries it.
+                log.error("Failed to reconcile action id={} (left QUEUED for retry)", entry.id(), e);
             }
+        }
+    }
+
+    /**
+     * On startup, surface any entries stranded in {@code REVALIDATED} by a crash before
+     * execution was confirmed. Per the at-most-once contract we do NOT re-run them; we
+     * move them to {@code ORPHANED} and log, so they're visible on {@code GET /api/outbox}
+     * for a human to reconcile rather than being invisible forever.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    void sweepOrphansOnStartup() {
+        Mono.fromRunnable(this::sweepOrphans)
+                .subscribeOn(Schedulers.boundedElastic())
+                .onErrorResume(e -> {
+                    log.error("Orphan sweep failed", e);
+                    return Mono.empty();
+                })
+                .subscribe();
+    }
+
+    void sweepOrphans() {
+        List<OutboxEntry> stranded = outbox.byState(OutboxState.REVALIDATED);
+        for (OutboxEntry entry : stranded) {
+            outbox.updateState(entry.id(), OutboxState.ORPHANED);
+            log.warn("Startup: action id={} was stranded in REVALIDATED (crash before execution "
+                    + "confirmed); marked ORPHANED for review, NOT retried (at-most-once)", entry.id());
         }
     }
 

@@ -204,6 +204,12 @@ drafting only* (DESIGN §5); the eval suite is how you decide that per model.
   may be stale by reconnect. Revalidation (a cloud-model check of the action against
   current state) is the guard; on any doubt it surfaces the action rather than firing
   it, because an unsent email is recoverable and a wrong sent one isn't.
+- **At-most-once execution.** The outbox entry is advanced to `REVALIDATED` *before* the
+  side-effect fires, so a crash mid-fire can never cause a double-send. The cost is that
+  an entry can be stranded in `REVALIDATED` with its execution status unknown; rather than
+  re-run it (risking a duplicate), a startup sweep moves such entries to `ORPHANED` and
+  logs them, and they surface on `GET /api/outbox` for a human to reconcile. Duplicate
+  suppression over delivery guarantee is the deliberate trade for irreversible actions.
 - **Memory as an event log.** Immutable, per-node, sequence-tagged events make
   ship↔shore sync log shipping + merge, with divergence kept (not lost) and folded
   back as context.
