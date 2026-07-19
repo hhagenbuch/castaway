@@ -51,7 +51,13 @@ public class LocalLlmClient implements LlmClient {
                 .bodyValue(buildBody(messages, tools))
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .map(this::parse);
+                .map(this::parse)
+                // Offline is the local model's whole job, so a connection failure here is
+                // the one that must be legible: distinguish "Ollama isn't running" from a
+                // generic error, since there is no further fallback behind it.
+                .onErrorMap(ModelRouter::isConnectivity, e -> new IllegalStateException(
+                        "local model unavailable at " + props.local().baseUrl()
+                                + " — is Ollama running? (ollama serve; ollama pull " + props.local().model() + ")", e));
     }
 
     private ObjectNode buildBody(List<ObjectNode> messages, Collection<AgentTool> tools) {

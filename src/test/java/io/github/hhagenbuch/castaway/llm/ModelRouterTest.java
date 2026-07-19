@@ -10,8 +10,10 @@ import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.net.ConnectException;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -61,6 +63,43 @@ class ModelRouterTest {
                 .verifyComplete();
     }
 
+    @Test
+    void cloudConnectivityFailureFallsBackToLocalAndHintsTheMonitor() {
+        cloud.failWith(new ConnectException("connection refused")); // plug pulled mid-request
+        AtomicBoolean hinted = new AtomicBoolean(false);
+        LinkMonitor monitor = new LinkMonitor(Mono::empty, new CastawayProperties(null, null, null)) {
+            @Override
+            public LinkState state() {
+                return LinkState.ONLINE; // monitor hasn't flipped yet
+            }
+
+            @Override
+            public void hintUnreachable() {
+                hinted.set(true);
+            }
+        };
+        ModelRouter router = new ModelRouter(monitor, cloud, local, preferLocal(true));
+
+        StepVerifier.create(router.chat(List.<ObjectNode>of(), List.<AgentTool>of()))
+                .assertNext(response -> {
+                    assertThat(response.text()).isEqualTo("local says hi");
+                    assertThat(response.provenance().fellBack()).isTrue();
+                    assertThat(response.provenance().render()).isEqualTo("local:test (FALLBACK)");
+                })
+                .verifyComplete();
+        assertThat(hinted).isTrue(); // monitor nudged toward OFFLINE
+    }
+
+    @Test
+    void cloudNonConnectivityErrorPropagatesInsteadOfMaskingWithLocal() {
+        cloud.failWith(new IllegalStateException("HTTP 400 bad request")); // cloud reachable, unhappy
+        ModelRouter router = new ModelRouter(monitorAt(LinkState.ONLINE), cloud, local, preferLocal(true));
+
+        StepVerifier.create(router.chat(List.<ObjectNode>of(), List.<AgentTool>of()))
+                .expectErrorMessage("HTTP 400 bad request")
+                .verify();
+    }
+
     private static CastawayProperties preferLocal(boolean value) {
         return new CastawayProperties(null, null, new CastawayProperties.Routing(value));
     }
@@ -75,8 +114,14 @@ class ModelRouterTest {
     }
 
     private static class FakeCloud extends CloudLlmClient {
+        private Throwable failWith;
+
         FakeCloud() {
             super(null, new AgentProperties("", "cloud-model", 1, 1, 1), null);
+        }
+
+        void failWith(Throwable t) {
+            this.failWith = t;
         }
 
         @Override
@@ -86,7 +131,9 @@ class ModelRouterTest {
 
         @Override
         public Mono<LlmResponse> chat(List<ObjectNode> messages, Collection<AgentTool> tools) {
-            return Mono.just(new LlmResponse("cloud says hi", List.of(), null, "end_turn"));
+            return failWith != null
+                    ? Mono.error(failWith)
+                    : Mono.just(new LlmResponse("cloud says hi", List.of(), null, "end_turn"));
         }
     }
 

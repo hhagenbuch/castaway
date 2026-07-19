@@ -81,6 +81,13 @@ the local model — honestly labelled, never pretending it was the cloud. The
 `LinkMonitor` uses hysteresis (N consecutive agreeing probes) so a single
 dropped packet can't flap the state.
 
+**Pull the plug mid-request** and you don't even wait for the state to flip: the
+monitor detects a dead link but doesn't protect against one, so `ModelRouter`
+also catches a cloud connectivity failure in-band, retries on the local model,
+and tags the answer `local:qwen3:8b (FALLBACK)` — then nudges the monitor toward
+`OFFLINE`. The conversation survives the plug being pulled, not just a link
+that's already known-down.
+
 ## Roadmap
 
 - [x] Phase 0 — design doc ([`docs/DESIGN.md`](docs/DESIGN.md))
