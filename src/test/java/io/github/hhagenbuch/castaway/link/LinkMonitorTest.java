@@ -56,6 +56,16 @@ class LinkMonitorTest {
     }
 
     @Test
+    void unreachableHintsDriveTheStateLikeProbes() {
+        // A cloud call failing (ModelRouter fallback) hints the monitor; enough hints
+        // converge it to OFFLINE without waiting for the probe cadence.
+        monitor.hintUnreachable();
+        assertThat(monitor.state()).isEqualTo(LinkState.ONLINE); // hysteresis still holds
+        monitor.hintUnreachable();
+        assertThat(monitor.state()).isEqualTo(LinkState.OFFLINE);
+    }
+
+    @Test
     void streamReplaysCurrentStateToLateSubscribers() {
         monitor.submit(ProbeResult.unreachable());
         monitor.submit(ProbeResult.unreachable()); // now OFFLINE

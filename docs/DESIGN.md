@@ -28,15 +28,24 @@ domain-neutral.
 
 ### 2.1 LinkMonitor
 A state machine over three states — `ONLINE`, `DEGRADED`, `OFFLINE` — fed by
-active probes (latency and loss to the cloud endpoint). Hysteresis (require N
-consecutive good/bad probes, plus a dwell time) prevents flapping. It emits
-transitions as events; every other component subscribes.
+active probes to the cloud endpoint. Each probe measures **reachability and
+round-trip time**; classification is `OFFLINE` when unreachable, `DEGRADED` when
+reachable but above an RTT threshold, else `ONLINE`. Hysteresis (require N
+consecutive agreeing probes) prevents flapping. It emits transitions as events;
+every other component subscribes.
 
 `DEGRADED` is the interesting state and the reason three states beat two:
-satellite links are rarely *down*, they are 700 ms RTT with 5% loss. In
+satellite links are rarely *down*, they are ~700 ms RTT (and lossy). In
 `DEGRADED` the router prefers the local model for long generations (latency ×
 tokens is brutal over such a link) but may still reach for the cloud on a hard
 reasoning step.
+
+> **Probe fidelity.** The Phase 1 probe drives `DEGRADED` off RTT and timeouts.
+> Packet-loss sampling (send N, measure delivered) is a planned refinement; the
+> lossy-link scenario is exercised end-to-end by the Phase 3 chaos harness
+> (`satellite.sh`: 700 ms + 5% loss). The monitor is also self-healing — it must
+> survive the very conditions it measures, so the probe stream drops surplus
+> ticks and resubscribes on error rather than freezing at a stale state.
 
 Exposed at `GET /api/link` and as an SSE stream (`GET /api/link/stream`) so a
 dashboard/demo can render the banner live.

@@ -5,12 +5,19 @@ import io.github.hhagenbuch.castaway.config.CastawayProperties;
 import io.github.hhagenbuch.castaway.link.LinkMonitor;
 import io.github.hhagenbuch.castaway.link.LinkState;
 import io.github.hhagenbuch.castaway.tools.AgentTool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
 import reactor.core.publisher.Mono;
 
+import java.io.IOException;
+import java.net.ConnectException;
+import java.net.UnknownHostException;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 
 /**
  * The payoff of the {@link LlmClient} abstraction: the agent loop injects a
@@ -26,10 +33,19 @@ import java.util.List;
  *       brutal on a satellite link); flip via {@code castaway.routing.degraded-prefers-local}.
  *       Budget-aware routing (cloud for short high-value reasoning) is a later increment.</li>
  * </ul>
+ *
+ * <p><b>Call-level fallback.</b> The monitor <em>detects</em> a dead link; it does not
+ * <em>protect</em> against one. Between pulling the plug and the hysteresis flipping to
+ * OFFLINE (probe-interval x required-consecutive), the state still says ONLINE and cloud
+ * calls fail. So when a cloud call fails on a connectivity error, we retry the same
+ * request on the local model in-band — tagged {@code (FALLBACK)} — and nudge the monitor
+ * toward OFFLINE. This is what lets a conversation survive the plug being pulled mid-turn.
  */
 @Component
 @Primary
 public class ModelRouter implements LlmClient {
+
+    private static final Logger log = LoggerFactory.getLogger(ModelRouter.class);
 
     private final LinkMonitor link;
     private final CloudLlmClient cloud;
@@ -47,9 +63,26 @@ public class ModelRouter implements LlmClient {
     public Mono<LlmResponse> chat(List<ObjectNode> messages, Collection<AgentTool> tools) {
         LinkState state = link.state();
         LlmClient delegate = route(state);
-        String label = delegate == cloud ? cloud.label() : local.label();
-        return delegate.chat(messages, tools)
-                .map(response -> response.withProvenance(new Provenance(label, state)));
+        if (delegate == cloud) {
+            return cloud.chat(messages, tools)
+                    .map(response -> response.withProvenance(new Provenance(cloud.label(), state)))
+                    .onErrorResume(ModelRouter::isConnectivity, e -> fallBackToLocal(messages, tools, state, e));
+        }
+        return local.chat(messages, tools)
+                .map(response -> response.withProvenance(new Provenance(local.label(), state)));
+    }
+
+    /**
+     * Cloud connectivity failed while the monitor still believed the link was up. Retry
+     * on the local model and hint the monitor that the cloud is unreachable, so it
+     * converges to OFFLINE faster than the probe cadence alone would.
+     */
+    private Mono<LlmResponse> fallBackToLocal(List<ObjectNode> messages, Collection<AgentTool> tools,
+                                              LinkState state, Throwable cause) {
+        log.warn("Cloud call failed on connectivity ({}); falling back to local model", cause.toString());
+        link.hintUnreachable();
+        return local.chat(messages, tools)
+                .map(response -> response.withProvenance(new Provenance(local.label(), state, true)));
     }
 
     /** Which client answers in this link state. Package-visible for the router test. */
@@ -59,5 +92,23 @@ public class ModelRouter implements LlmClient {
             case OFFLINE -> local;
             case DEGRADED -> degradedPrefersLocal ? local : cloud;
         };
+    }
+
+    /**
+     * A transport/connectivity failure (link is down) as opposed to an HTTP status
+     * error (cloud is reachable but unhappy — {@code WebClientResponseException}, which
+     * is deliberately not matched here so we don't mask real 4xx/5xx behind a local answer).
+     */
+    static boolean isConnectivity(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c instanceof WebClientRequestException
+                    || c instanceof ConnectException
+                    || c instanceof UnknownHostException
+                    || c instanceof TimeoutException
+                    || c instanceof IOException) {
+                return true;
+            }
+        }
+        return false;
     }
 }

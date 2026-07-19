@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
+import reactor.util.retry.Retry;
 
 import java.time.Duration;
 
@@ -63,11 +64,31 @@ public class LinkMonitor {
             log.info("Link probing disabled; link pinned at {}", current);
             return;
         }
+        // The monitor must survive the very conditions it measures. Two failure modes:
+        //  1. A probe slower than the tick interval (plausible on the degraded links this
+        //     project targets) would back-pressure Flux.interval into an OverflowException.
+        //     onBackpressureDrop drops surplus ticks instead — a skipped probe is fine.
+        //  2. Any unforeseen error in the stream would, with a bare subscribe(), terminate
+        //     the subscription silently and freeze the state at its last value forever — a
+        //     frozen monitor confidently reports stale truth. retryWhen resubscribes.
         probing = Flux.interval(Duration.ofMillis(cfg.probeIntervalMillis()))
+                .onBackpressureDrop(dropped -> log.debug("Probe tick dropped; previous probe still in flight"))
                 .concatMap(tick -> probe.probe().onErrorReturn(ProbeResult.unreachable()))
-                .subscribe(this::submit);
+                .doOnNext(this::submit)
+                .retryWhen(Retry.fixedDelay(Long.MAX_VALUE, Duration.ofMillis(cfg.probeIntervalMillis()))
+                        .doBeforeRetry(rs -> log.warn("Link probe stream failed; resubscribing", rs.failure())))
+                .subscribe(result -> { }, err -> log.error("Link probe stream terminated", err));
         log.info("Link probing started ({}ms interval, DEGRADED above {}ms RTT)",
                 cfg.probeIntervalMillis(), cfg.degradedRttMillis());
+    }
+
+    /**
+     * Hint from elsewhere in the runtime that the cloud is unreachable right now (e.g. a
+     * cloud call just failed on a connectivity error). Feeds the state machine like a probe
+     * so the transition to OFFLINE doesn't have to wait a full probe cycle.
+     */
+    public void hintUnreachable() {
+        submit(ProbeResult.unreachable());
     }
 
     /**
