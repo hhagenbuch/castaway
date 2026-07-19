@@ -1,0 +1,36 @@
+# Cloud model (Anthropic) — used when the link is ONLINE.
+agent:
+  api-key: ${ANTHROPIC_API_KEY:}
+  model: claude-sonnet-5
+  max-tokens: 1024
+  max-tool-iterations: 6
+  max-retries: 3
+
+# castaway runtime: local model + link detection + routing policy.
+castaway:
+  local:
+    # Ollama, OpenAI-compatible /api/chat. Pull a tool-capable model first:
+    #   ollama pull qwen3:8b
+    base-url: http://localhost:11434
+    model: qwen3:8b
+    max-tokens: 1024
+  link:
+    # Active probing of the cloud endpoint drives the ONLINE/DEGRADED/OFFLINE
+    # state machine. Disable in tests so the context doesn't touch the network.
+    probe-enabled: true
+    probe-interval-millis: 5000
+    probe-timeout-millis: 2000
+    # RTT above this (but still reachable) counts as DEGRADED, not ONLINE.
+    degraded-rtt-millis: 400
+    # Hysteresis: this many consecutive agreeing probes before a state flips.
+    required-consecutive: 2
+  routing:
+    # DEGRADED default: prefer the local model (latency x tokens is brutal on a
+    # satellite link). Budget-aware refinement is a later increment.
+    degraded-prefers-local: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics

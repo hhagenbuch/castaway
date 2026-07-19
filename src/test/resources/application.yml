@@ -1,0 +1,9 @@
+# Test profile: never probe the real network from a context/unit test.
+castaway:
+  link:
+    probe-enabled: false
+  local:
+    base-url: http://localhost:11434
+    model: test-local
+agent:
+  api-key: ""
