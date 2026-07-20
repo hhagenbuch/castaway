@@ -7,21 +7,21 @@
 #   - mvn -q package -DskipTests   (builds target/castaway-*.jar)
 #
 # The scene: the link is forced OFFLINE, so every answer comes from the local
-# model, and a side-effecting tool queues instead of firing.
+# model, a side-effecting tool queues instead of firing, and the same action
+# requested twice still queues exactly once.
 #
-# Note on what the recording does and does not show: the outbox ends with one
-# entry. How many times the model actually called send_email varies run to run
-# (small models are eager) — the content-derived idempotency key is what makes
-# the queued count one regardless. A given recording may show a single call, so
-# don't read "one entry" as proof of de-duplication; that is covered by the
-# outbox tests, not by this GIF.
+# On the de-duplication beat: the outbox key is derived from the *content* of the
+# action, so the request dictates subject and body. That is deliberate — asked
+# vaguely ("email Bob to move the meeting"), a small model re-words the subject
+# on each turn, which is a genuinely different email and correctly queues again.
+# Same action in, one entry out; different action in, two entries out.
 
 Output docs/castaway-offline-demo.gif
 
 Set Shell zsh
 Set FontSize 15
 Set Width 1180
-Set Height 620
+Set Height 680
 Set Framerate 10
 Set TypingSpeed 12ms
 Set Theme "Catppuccin Mocha"
@@ -42,29 +42,39 @@ Sleep 45s
 # Warm the model so the recording shows steady-state latency, not first-load.
 Type `curl -s localhost:8080/api/chat -H 'content-type: application/json' -d '{"message":"hi"}' >/dev/null` Enter
 Sleep 35s
-Type `clear` Enter
-Sleep 1s
+# Title card: painted while hidden so the GIF opens on it, not on a bare prompt.
+Type `clear && printf '\n  \033[1;36mcastaway\033[0m — agent runtime for disconnected environments\n\n  \033[2mno API key · local model: qwen3:8b · link forced OFFLINE\033[0m\n\n'` Enter
+Sleep 2s
 Show
+Sleep 2500ms
 
 # ---------------------------------------------------------------- the demo
 # 1. The link is down. Not degraded, not pretending — down.
 Type `curl -s localhost:8080/api/link` Enter
-Sleep 3s
+Sleep 2500ms
 
 # 2. Ask a question anyway. It answers — from the local model, and says so.
 Type `curl -s localhost:8080/api/chat -H 'content-type: application/json' \` Enter
 Type `  -d '{"message":"In one sentence, what is a satellite link?"}' | jq '{reply, provenance}'` Enter
-Sleep 9s
+Sleep 8s
 
 # 3. Ask for a real side effect. Offline, it drafts and QUEUES — it does not
 #    claim to have sent the mail.
-Type `curl -s localhost:8080/api/chat -H 'content-type: application/json' \` Enter
-Type `  -d '{"message":"Email bob@example.com to move our 2pm meeting to 3pm."}' | jq '{reply, toolsUsed}'` Enter
-Sleep 15s
+Type `E='{"message":"Email bob@example.com with subject \"Reschedule\" and body \"Move our 2pm to 3pm.\""}'` Enter
+Sleep 1s
+Type `curl -s localhost:8080/api/chat -H 'content-type: application/json' -d "$E" | jq '{reply, toolsUsed}'` Enter
+Sleep 14s
 
-# 4. The payoff: one queued action, holding whether the model called send_email
-#    once or three times — the idempotency key is derived from the content.
-Type `curl -s localhost:8080/api/outbox | jq '[.[] | {id, actionType, state}]'` Enter
+# 4. Ask for the exact same action again. Same content -> same idempotency key.
+#    Only toolsUsed is shown here, deliberately: a small model sometimes invents
+#    an id in its prose ("queued as ID 2") when the outbox holds one entry. The
+#    narration is not the source of truth, so the recording does not quote it.
+Type `curl -s localhost:8080/api/chat -H 'content-type: application/json' -d "$E" | jq '{toolsUsed}'` Enter
+Sleep 18s
+
+# 5. The payoff: two requests, and the model often calls send_email more than
+#    once per turn — still ONE queued action.
+Type `curl -s localhost:8080/api/outbox | jq '[.[] | {id, state, key: .idempotencyKey[0:8]}]'` Enter
 Sleep 5s
 
 # ---------------------------------------------------------------- teardown (hidden)
