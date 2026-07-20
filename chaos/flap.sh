@@ -20,3 +20,4 @@ for i in $(seq 1 "$CYCLES"); do
   sleep "$PERIOD"
 done
 echo "[flap] done. Watch GET /api/link/stream — transitions should be damped, not 1:1 with blips."
+echo "[flap] interrupted mid-cycle? the 'flap' toxic may still be applied — run chaos/restore.sh"
