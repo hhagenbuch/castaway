@@ -43,7 +43,13 @@ model, shows it's `OFFLINE`, drafts and *queues* an email instead of pretending
 it sent it, then reconciles when the link returns — revalidating each queued
 action against current state before it fires.
 
-Here's the offline half, verbatim from a real run (`--castaway.link.forced-state=OFFLINE`,
+![castaway answering and queueing while offline](docs/castaway-offline-demo.gif)
+
+The recording is scripted, not hand-captured: [`demo/castaway-offline.tape`](demo/castaway-offline.tape)
+drives it with [vhs](https://github.com/charmbracelet/vhs), so `vhs demo/castaway-offline.tape`
+reproduces it on any machine with Ollama and `qwen3:8b`. No API key involved.
+
+The same flow in text, verbatim from a real run (`--castaway.link.forced-state=OFFLINE`,
 no API key, `qwen3:8b` via Ollama):
 
 ```console
@@ -70,10 +76,13 @@ Note the local model called `send_email` three times (small models are eager),
 but the content-derived **idempotency key deduped it to a single queued action** —
 the outbox has one entry, not three. That's the durability design earning its keep.
 
-> **Recording the GIF.** The 30-second screen capture (chat → `chaos/partition.sh`
-> → `OFFLINE` → queued email → restore → reconciliation) is a manual step — run the
-> flow above while capturing your terminal. It isn't checked in because it's a binary
-> asset; the transcript above is the same flow in text.
+> **What the recording covers.** The offline half: link down → answered locally with
+> provenance → email queued rather than sent → one entry in the outbox. The reconnect
+> half (`chaos/partition.sh` → restore → revalidate-then-send) is not in the GIF; run
+> [`chaos/`](chaos/) for that. The outbox ends with one entry regardless of how many
+> times the model called `send_email` — small models are eager, and the idempotency key
+> is derived from content — but a single run doesn't demonstrate that on its own, so
+> read it as "queued, not sent", not as proof of de-duplication.
 
 ## Running it (Phase 1)
 
