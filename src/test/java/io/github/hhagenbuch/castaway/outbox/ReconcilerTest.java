@@ -1,6 +1,6 @@
 package io.github.hhagenbuch.castaway.outbox;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.github.hhagenbuch.castaway.email.LoggingEmailTransport;
 import io.github.hhagenbuch.castaway.link.LinkMonitor;
 import io.github.hhagenbuch.castaway.config.CastawayProperties;

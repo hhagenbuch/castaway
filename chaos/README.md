@@ -9,6 +9,7 @@ cloud API, so the ONLINE / DEGRADED / OFFLINE behaviours are reproducible.
 | `partition.sh` | Hard cut — cloud unreachable → castaway converges to `OFFLINE`. |
 | `satellite.sh` | 700 ms latency + ~5% loss + 200 kbps → `DEGRADED`, router prefers local. |
 | `flap.sh` | Oscillate up/down → exercises the monitor's hysteresis (state should not thrash). |
+| `restore.sh` | Remove every toxic the scripts above can add → link back to clean/`ONLINE`. |
 
 ## Setup
 

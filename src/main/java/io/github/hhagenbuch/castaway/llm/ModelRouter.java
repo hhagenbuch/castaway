@@ -1,6 +1,6 @@
 package io.github.hhagenbuch.castaway.llm;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.node.ObjectNode;
 import io.github.hhagenbuch.castaway.config.CastawayProperties;
 import io.github.hhagenbuch.castaway.link.LinkMonitor;
 import io.github.hhagenbuch.castaway.link.LinkState;

@@ -1,7 +1,7 @@
 package io.github.hhagenbuch.castaway.outbox;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import io.github.hhagenbuch.castaway.email.EmailTransport;
 import io.github.hhagenbuch.castaway.link.LinkMonitor;
 import io.github.hhagenbuch.castaway.link.LinkState;
