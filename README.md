@@ -15,21 +15,16 @@ See [`docs/DESIGN.md`](docs/DESIGN.md) for the full RFC; the roadmap below track
 
 ## Architecture
 
-```
-                       ┌─────────────────────────────────────────┐
-                       │              castaway runtime            │
-User ──► Chat API ──►  │  AgentLoop (bounded reactive tool loop)  │
-                       │      │                                   │
-                       │  ModelRouter ──► CloudLlmClient (Anthropic)
-                       │      │       └─► LocalLlmClient (Ollama)  │
-                       │      ▲                                    │
-                       │  LinkMonitor (ONLINE/DEGRADED/OFFLINE)    │
-                       │      │                                    │
-                       │  CapabilityGate ──► ToolRegistry          │
-                       │      │        (tools declare link needs)  │
-                       │  Outbox ──► reconciler (on reconnect)     │
-                       │  MemoryLog ──► sync (on reconnect)        │
-                       └─────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    U[User → Chat API] --> AL[AgentLoop<br/>bounded reactive tool loop]
+    AL --> MR[ModelRouter<br/>provenance-tagged]
+    MR -->|ONLINE| CL[CloudLlmClient · Anthropic]
+    MR -->|OFFLINE / FALLBACK| LL[LocalLlmClient · Ollama]
+    LM[LinkMonitor<br/>ONLINE / DEGRADED / OFFLINE<br/>hysteresis] --> MR
+    AL --> CG[CapabilityGate] --> TR[ToolRegistry<br/>tools declare link needs]
+    AL --> OB[(Outbox · SQLite<br/>queue → revalidate on reconnect)]
+    AL --> ML[(MemoryLog · append-only<br/>ship ↔ shore sync)]
 ```
 
 Six components, each a distributed-systems problem applied to a new domain:
