@@ -43,7 +43,13 @@ model, shows it's `OFFLINE`, drafts and *queues* an email instead of pretending
 it sent it, then reconciles when the link returns — revalidating each queued
 action against current state before it fires.
 
-Here's the offline half, verbatim from a real run (`--castaway.link.forced-state=OFFLINE`,
+![castaway answering and queueing while offline](docs/castaway-offline-demo.gif)
+
+The recording is scripted, not hand-captured: [`demo/castaway-offline.tape`](demo/castaway-offline.tape)
+drives it with [vhs](https://github.com/charmbracelet/vhs), so `vhs demo/castaway-offline.tape`
+reproduces it on any machine with Ollama and `qwen3:8b`. No API key involved.
+
+The same flow in text, verbatim from a real run (`--castaway.link.forced-state=OFFLINE`,
 no API key, `qwen3:8b` via Ollama):
 
 ```console
@@ -70,10 +76,18 @@ Note the local model called `send_email` three times (small models are eager),
 but the content-derived **idempotency key deduped it to a single queued action** —
 the outbox has one entry, not three. That's the durability design earning its keep.
 
-> **Recording the GIF.** The 30-second screen capture (chat → `chaos/partition.sh`
-> → `OFFLINE` → queued email → restore → reconciliation) is a manual step — run the
-> flow above while capturing your terminal. It isn't checked in because it's a binary
-> asset; the transcript above is the same flow in text.
+> **What the recording covers.** The offline half: link down → answered locally with
+> provenance → the same email requested **twice** → one entry in the outbox. Watch
+> `toolsUsed` on the repeat: the model calls `send_email` twice in that turn alone, so
+> three calls across two requests collapse to a single queued action — the idempotency
+> key is derived from the action's content, not from the number of calls.
+>
+> The flip side is worth knowing: asked *vaguely* ("email Bob to move the meeting"), a
+> small model re-words the subject each turn, which is a genuinely different email and
+> correctly queues a second entry. The demo dictates subject and body for that reason.
+>
+> The reconnect half (`chaos/partition.sh` → restore → revalidate-then-send) is not in
+> the GIF; run [`chaos/`](chaos/) for that.
 
 ## Running it (Phase 1)
 
@@ -166,8 +180,8 @@ machine (Apple Silicon, Ollama, `--castaway.link.forced-state=OFFLINE`,
 
 | Model | Offline Q&A | `send_email` queues (1 entry) | Honest "did not send" narration | Tool discipline | Latency (warm / cold) |
 |-------|:-----------:|:-----------------------------:|:-------------------------------:|:---------------:|:---------------------:|
-| `qwen3:8b`   | ✅ | ✅ (deduped 3 calls → 1) | ✅ clear ("NOT sent... QUEUED") | good (no spurious calls) | ~2 s / ~6 s |
-| `llama3.1:8b` | ⚠️ answers correctly when warm, but **over-declined a plain question on a cold call** | ✅ (queued 1) | ⚠️ weak — queued fine, but narrated it by referencing a **nonexistent tool** | ⚠️ **spurious tool calls** (invoked `calculator`/`clock` on a definition question) | ~1–2 s / ~24 s |
+| `qwen3:8b`   | ✅ | ✅ (deduped 3 calls → 1) | ✅ clear ("NOT sent... QUEUED") | good (no spurious calls) | **~4–6 s warm / ~11 s first call** |
+| `llama3.1:8b` | ⚠️ answers correctly when warm, but **over-declined a plain question on a cold call** | ✅ (queued 1) | ⚠️ weak — queued fine, but narrated it by referencing a **nonexistent tool** | ⚠️ **spurious tool calls** (invoked `calculator`/`clock` on a definition question) | ~1–2 s / ~24 s *(not re-measured)* |
 
 **Finding:** `qwen3:8b` is the better offline default here. Both correctly queue
 the email (the durable outbox + idempotency key make the *action* safe regardless of
@@ -178,6 +192,16 @@ why the pick is empirical and why the safety nets don't depend on the model: the
 idempotency key, not the model's restraint, is what turned `qwen3`'s three
 `send_email` calls into one queued action. If a model can't tool-call reliably
 offline, the designed fallback is *offline = Q&A + drafting only* (DESIGN §5).
+
+**Conditions matter more than the number.** The `qwen3:8b` latencies above were
+re-measured with the demo tape (`vhs demo/castaway-offline.tape`) on Apple Silicon
+with **thinking enabled** — the default. A one-sentence answer costs ~350 eval
+tokens because most of them are reasoning tokens the user never sees, which is
+where the seconds go, not the answer itself. An earlier run of this table reported
+~2 s warm; that figure did not survive re-measurement under stated conditions, so
+it has been replaced rather than kept. The `llama3.1:8b` row has **not** been
+re-measured and is carried over from the original run — treat its latency as
+indicative only.
 
 Reproduce / extend with the eval suite:
 
